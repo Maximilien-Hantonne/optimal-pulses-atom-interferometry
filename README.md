@@ -1,4 +1,4 @@
-# Quantum Pulse Optimization for Cold Atom Interferometry
+# Quantum Pulse Optimization for Atom Interferometry
 
 This repository contains two main Python scripts for quantum pulse optimization and analysis in cold atom interferometry systems, specifically designed for Rubidium-87 atomic interferometry using three-level system.
 
