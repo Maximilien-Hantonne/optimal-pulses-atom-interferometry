@@ -76,7 +76,7 @@ k_eff = 2 * np.pi / 780e-9
 ### TIME PARAMETERS
 
 time_count = 5000 # Number of time samples
-duration = 700e-6 # Total duration of the pulse
+duration = 700e-6 # Total duration of the simulation
 center_time = duration / 2
 sample_times = np.linspace(0, duration, time_count)
 
@@ -383,12 +383,12 @@ def evaluate_width(width, pulse_shape, pulse_type):
         noise_max=0.0, output_node_names=["states"])
     populations = np.abs(result["output"]["states"]["value"].squeeze()) ** 2
     if pulse_type == "bs":
-        tolerance = 0.001
+        tolerance = 0.0005
         threshold = 90
         end_idx = np.argmax(sample_times >= center_time + 2 * width)
         mismatch = np.abs(populations[end_idx:, 0] - populations[end_idx:, 2])
     elif pulse_type == "m":
-        tolerance = 0.001
+        tolerance = 0.0005
         threshold = 90
         end_idx = np.argmax(sample_times >= center_time + 2 * width)
         mismatch = np.abs(populations[end_idx:, 0])
