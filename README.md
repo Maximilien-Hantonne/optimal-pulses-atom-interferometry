@@ -2,19 +2,20 @@
 
 This repository contains two main Python scripts for quantum pulse optimization and analysis in cold atom interferometry systems, specifically designed for Rubidium-87 atomic interferometry using three-level system.
 
-## 📁 Files Overview
+## Files Overview
 
 - **`pulse_opt.py`**: Main optimization script for quantum pulse parameters
 - **`pulse_opt_doc.py`**: Comprehensive documentation and helper functions for pulse optimization
 - **`infidelity_map.py`**: Analysis script for generating infidelity maps across parameter spaces
+- **`infidelity_maps_plots/`**: Directory containing pre-computed infidelity maps for reference
 - **`README.md`**: This documentation file
 
-## 🔧 Requirements
+## Requirements
 
 #### Boulder Opal (Proprietary)
 The primary quantum control library for pulse optimization:
 
-**⚠️ Proprietary Software - License Required**
+** Proprietary Software - License Required**
 
 ```bash
 pip install boulderopal
@@ -25,7 +26,7 @@ pip install boulderopal
 #### QCtrl Visualizer (Proprietary)
 For plotting and visualization:
 
-**⚠️ Proprietary Software - License Required**
+** Proprietary Software - License Required**
 
 ```bash
 pip install qctrlvisualizer
@@ -48,7 +49,7 @@ Install the required packages using pip:
 pip install numpy scipy matplotlib tqdm colorednoise
 ```
 
-## 🧮 Physics Background
+## Physics Background
 
 ### Three-Level Lambda System
 
@@ -65,7 +66,7 @@ The system Hamiltonian includes:
 - **Detunings**: Single-photon (Δ) and two-photon (δ) detunings
 - **Noise sources**: Phase noise, intensity fluctuations, momentum spread
 
-## 📊 pulse_opt.py - Pulse Optimization
+## pulse_opt.py - Pulse Optimization
 
 ### Purpose
 Optimizes quantum pulse parameters to achieve high-fidelity beam-splitter and mirror operations for atomic interferometry using gradient-based optimization through Boulder Opal.
@@ -236,7 +237,7 @@ noise_values = np.logspace(-12, -3, n)   # 10^-12 to 10^-3 rad²/Hz
 - **Format**: High-resolution PNG (500 DPI)
 - **Colormap**: Viridis with logarithmic normalization
 
-## 🎯 Performance Tips
+## Performance Tips
 
 ### For pulse_opt.py (Optimization)
 - **Memory**: Use smaller `time_count` (try 2000-3000) for initial testing
@@ -249,7 +250,7 @@ noise_values = np.logspace(-12, -3, n)   # 10^-12 to 10^-3 rad²/Hz
 - **Analysis time**: Typical runs take 30-60 minutes for all maps
 - **Grid resolution**: 50×50 gives good detail, 75×75 for publication quality
 
-## 📝 Parameter Guidelines
+## Parameter Guidelines
 
 ### pulse_opt.py Parameter Ranges
 
@@ -285,7 +286,7 @@ grid_resolution = 50               # 50×50 = 2500 calculations per map
 ```
 
 
-## � License
+## License
 
 ### MIT License
 
@@ -332,8 +333,8 @@ This MIT license applies **ONLY** to the code in this repository (`pulse_opt.py`
 
 To run the code in this repository, you must:
 
-1. ✅ **Use the MIT-licensed code** in this repository freely
-2. 🔐 **Obtain valid licenses** for Boulder Opal and QCtrl Visualizer from QCtrl
-3. 📋 **Comply with all license terms** of the proprietary QCtrl software
+1. **Use the MIT-licensed code** in this repository freely
+2. **Obtain valid licenses** for Boulder Opal and QCtrl Visualizer from QCtrl
+3. **Comply with all license terms** of the proprietary QCtrl software
 
 **The authors of this repository have no affiliation with QCtrl and cannot provide licenses for QCtrl's proprietary software.**
