@@ -4,6 +4,7 @@ import sys
 import time
 import pickle
 import signal
+import psutil
 import traceback
 import matplotlib
 import numpy as np
@@ -82,8 +83,8 @@ sample_times = np.linspace(0, duration, time_count)
 
 ### OPIMIZATION PARAMETERS
 
-max_workers = cpu_count() // 2   # Number of workers for parallel processing
-learning_rates = list(np.round(np.logspace(-1, -4, max_workers-2), 6)) # Learning rates for optimization
+max_workers = None   # Number of workers for parallel processing
+learning_rates = None # Learning rates for optimization
 nb_iterations = 4000 # Number of iterations for optimization
 
 ### BATCH DIMENSIONS
@@ -93,6 +94,7 @@ intensity_batch = max(time_count//1000, 50)  # Number of intensity samples
 
 ### LASER PARAMETERS
 
+# Useless for optimization just to know what the parameters mean in term of wavelength and intensity
 def laser_parameters(Delta, delta, Omega1, Omega2):
     def equations(vars):
         lambda1, lambda2 = vars
@@ -122,9 +124,12 @@ sigma_m23 = np.array([[0, 0, 0], [0, 0, 0], [0, 1, 0]])
 
 # Return a momentum distribution based on a Gaussian distribution
 def momentum_distribution(graph, sigma, batch_dim):
+
+    # If sigma is zero, return a constant zero momentum signal
     if sigma <= 0.0:
         return graph.constant_pwc(constant=0.0, duration=duration), batch_dim
-    sigma = sigma
+    
+    # If sigma is positive, generate random momentum samples with deviation sigma
     momentum_samples = graph.random.normal(
         standard_deviation=sigma,
         mean=p_0,
@@ -134,15 +139,19 @@ def momentum_distribution(graph, sigma, batch_dim):
         constant=momentum_samples[:, None, None],
         duration=duration,
         batch_dimension_count=batch_dim,)
-    momentum = momentum * hbar * k_eff / m_Rb  
+    
     return momentum, batch_dim + 1
 
 ### INTENSITY DISTRIBUTION
 
 # Return an intensity distribution based on a Gaussian profile
 def intensity_distribution(graph, sigma, batch_dim, beta_min=0.0, beta_max=1.0):
+
+    # If sigma is zero, return a constant intensity signal equal to beta_max
     if sigma <= 0.0:
-        return graph.constant_pwc(constant=1.0, duration=duration), batch_dim
+        return graph.constant_pwc(constant=beta_max, duration=duration), batch_dim
+    
+    # If sigma is positive, generate a Gaussian profile for intensity
     x = np.linspace(0, 1, intensity_batch)
     profile = np.exp(- (x**2) / (2 * sigma**2))
     profile = profile / profile.max()          
@@ -151,19 +160,23 @@ def intensity_distribution(graph, sigma, batch_dim, beta_min=0.0, beta_max=1.0):
         constant=profile[:, None, None],
         duration=duration,
         batch_dimension_count=batch_dim,)
+    
     return intensity, batch_dim + 1
 
 ### PHASE NOISE
 
 # Return a colored phase noise signal
 def phase_noise(graph, noise_max, alpha=1, cutoff=5e4):
+
+    # If noise_max is zero, return a constant zero phase noise signal
     if noise_max <= 0.0:
         return graph.constant_pwc(constant=0.0, duration=duration)
+    
+    # If noise_max is positive, generate a colored noise signal with decay equal to alpha
     dt = duration / time_count
-    fs = 1 / dt
-    pink_noise = cn.powerlaw_psd_gaussian(exponent=alpha, size=time_count)
+    colored_noise = cn.powerlaw_psd_gaussian(exponent=alpha, size=time_count)
     freqs = np.fft.rfftfreq(time_count, d=dt)
-    spectrum = np.fft.rfft(pink_noise)
+    spectrum = np.fft.rfft(colored_noise)
     scaling = np.ones_like(freqs)
     nonzero_freqs = freqs > 0
     scaling[nonzero_freqs] = np.where(
@@ -174,12 +187,15 @@ def phase_noise(graph, noise_max, alpha=1, cutoff=5e4):
     spectrum *= scaling
     hybrid_noise = np.fft.irfft(spectrum, n=time_count)
     hybrid_noise *= noise_max / np.std(hybrid_noise)
+
     return graph.pwc_signal(duration=duration, values=hybrid_noise)
 
 ### PULSE 
 
 # Return a pulse signal with a specified shape and width.
 def pulse(graph, pulse_shape, width, amplitude, name="pulse"):
+
+    # Gaussian pulse
     if pulse_shape == "gaus":
         return graph.signals.gaussian_pulse_pwc(
             duration=duration,
@@ -188,6 +204,8 @@ def pulse(graph, pulse_shape, width, amplitude, name="pulse"):
             width=width,
             center_time=center_time,
             name = name)
+    
+    # Box pulse
     elif pulse_shape == "box":
         ramp_up = graph.signals.tanh_ramp_pwc(
             duration=duration,
@@ -206,6 +224,8 @@ def pulse(graph, pulse_shape, width, amplitude, name="pulse"):
         total_signal = ramp_up + ramp_down
         total_signal.name = name
         return total_signal
+    
+    # Sech pulse
     elif pulse_shape == "sech":
         return graph.signals.sech_pulse_pwc(
             duration=duration,
@@ -214,6 +234,7 @@ def pulse(graph, pulse_shape, width, amplitude, name="pulse"):
             width=width,
             center_time=center_time,
             name= name)
+    
     else:
         raise ValueError("Shape not implemented. Choose 'gaus', 'box' or 'sech'.")
 
@@ -227,7 +248,10 @@ def const_pwc(graph, value):
 # Return the three-level Rabi Hamiltonian
 def set_hamiltonian(graph, Delta, delta, pulse1, pulse2, 
                     momentum, betas, random_phi_1, random_phi_2):
+    
+    # Convert momentum to Doppler shift frequency
     momentum = momentum  * hbar * k_eff**2 / m_Rb
+
     return (
         graph.hermitian_part(delta * identity1)
         + graph.hermitian_part(-momentum * identity1)
@@ -255,13 +279,21 @@ def calculate_evolution(graph, Delta_signal, delta_signal, Omega1, Omega2,
                         pulse_shape = "gaus",  width = 0.1, sigma_p = 0.0, 
                         sigma_b = 0.0,  noise_max = 0.0,
                         output_node_names=["states", "unitaries"]):
+    
+    # Create laser pulses
     pulse1 = pulse(graph, pulse_shape, width, Omega1, name="pulse1")
     pulse2 = pulse(graph, pulse_shape, width, Omega2, name="pulse2")
+
+    # Generate momentum and intensity distributions
     batch_dim = 1
     momentum, batch_dim = momentum_distribution(graph, sigma=sigma_p, batch_dim=batch_dim)
     betas, batch_dim = intensity_distribution(graph, sigma=sigma_b, batch_dim=batch_dim)
+
+    # Generate phase noise signals
     random_phi_1 = phase_noise(graph, noise_max=noise_max)
     random_phi_2 = phase_noise(graph, noise_max=noise_max)
+
+    # Simulate the evolution of the system
     hamiltonian = set_hamiltonian(graph, Delta_signal ,delta_signal
                                   ,pulse1, pulse2, momentum, betas, 
                                   random_phi_1, random_phi_2)
@@ -270,15 +302,19 @@ def calculate_evolution(graph, Delta_signal, delta_signal, Omega1, Omega2,
     states = unitaries @ state
     states.name = "states"
     result = bo.execute_graph(graph=graph, output_node_names=output_node_names)
+
     return result
 
 ### COST
 
 # Calculate the cost for unitaries for gate infidelity
 def calculate_cost_unitaries(graph, unitaries, target_unitaries):
+
+    # Calculate the gate infidelity cost for unitaries
     cost = graph.sum(graph.abs(
         1 - graph.abs(graph.trace(graph.adjoint(target_unitaries)  @ unitaries) /
                     graph.trace(graph.adjoint(target_unitaries)  @ target_unitaries))**2))
+    
     cost.name = "cost"
     return cost
 
@@ -286,16 +322,21 @@ def calculate_cost_unitaries(graph, unitaries, target_unitaries):
 def calculate_cost_states(graph, pulse_type, unitaries):
     cost = 0.0
     target_index = time_count // 2 + 1
+
+    # Set the target state based on the pulse type
     if pulse_type == "bs":
         target_state = (1 / graph.sqrt(2)) * (
             graph.fock_state(3, 0)[:,None] + graph.fock_state(3, 2)[:,None])
     elif pulse_type == "m":
         target_state = graph.fock_state(3, 2)[:,None]
+
+    # Calculate the gate infidelity cost for states
     for i in range(target_index, time_count):
         cost += graph.abs(1 - graph.abs(graph.trace(graph.adjoint(target_state) @ 
                              unitaries[i,:,:] @ graph.fock_state(3, 0)[:,None]) /
                             graph.trace(graph.adjoint(target_state) @ 
                             target_state)) ** 2) / (time_count - target_index)
+        
     cost.name = "cost"
     return cost
 
@@ -303,6 +344,8 @@ def calculate_cost_states(graph, pulse_type, unitaries):
 
 def plotting(result, sigma_p=0.0, sigma_b=0.0, noise_max=0.0,
              pulse_shape="gaus", pulse_type="bs", what="states", when="before"):
+    
+    # Create directories for saving plots
     param_parts = []
     if sigma_p != 0.0:
         param_parts.append(f"p_{sigma_p}")
@@ -319,6 +362,8 @@ def plotting(result, sigma_p=0.0, sigma_b=0.0, noise_max=0.0,
     os.makedirs(param_path, exist_ok=True)
     filename_parts = [pulse_type, pulse_shape]
     filename_parts.extend(param_parts)
+
+    # Plotting the dynamics of the population
     if what == "states" :
         populations = np.abs(result["output"]["states"]["value"].squeeze())**2
         for non_null in [sigma_p != 0.0, sigma_b != 0.0]:
@@ -339,6 +384,8 @@ def plotting(result, sigma_p=0.0, sigma_b=0.0, noise_max=0.0,
         ax.legend(loc='lower right', bbox_to_anchor=(1, 0.5), fontsize=20)
         plt.tight_layout()
         filename_parts.append(f"{when}.png")
+
+    # Plotting the cost histories
     elif what == "cost":
         fig = plt.figure()
         qv.plot_cost_histories(
@@ -357,12 +404,16 @@ def plotting(result, sigma_p=0.0, sigma_b=0.0, noise_max=0.0,
         ax.legend( loc='upper center', bbox_to_anchor=(0.5, -0.5), ncol=ncol, fontsize=11)
         fig.subplots_adjust(bottom=bottom_margin)
         filename_parts.append("cost" + f"_{when}.png")
+
+    # Plotting the pulse shape
     elif what == "controls":
         fig = plt.figure()
         lr = list(result.keys())[0]
         qv.plot_controls({"Pulse 1": result[lr]["output"]["pulse1"], "Pulse 2": result[lr]["output"]["pulse2"],}, 
                          figure=fig)
         filename_parts.append("pulses.png")
+    
+    # Saving the figure
     filename = "_".join(filename_parts)
     shape_file_path = os.path.join(shape_path, filename)
     param_file_path = os.path.join(param_path, filename)
@@ -376,12 +427,16 @@ def plotting(result, sigma_p=0.0, sigma_b=0.0, noise_max=0.0,
 
 # Evaluate the efficiency for a quasi-perfect pulse
 def evaluate_width(width, pulse_shape, pulse_type):
+
+    # Initialize the graph and calculate the evolution oof the population
     graph = bo.Graph()
     result = calculate_evolution(graph=graph, Delta_signal=const_pwc(graph, Delta),
         delta_signal=const_pwc(graph, delta), Omega1=Omega_1, Omega2=Omega_2,
         pulse_shape=pulse_shape, width=width, sigma_p=0.0, sigma_b=0.0, 
         noise_max=0.0, output_node_names=["states"])
     populations = np.abs(result["output"]["states"]["value"].squeeze()) ** 2
+
+    # Calculate the mismatch between populations and the target state
     if pulse_type == "bs":
         tolerance = 0.0005
         threshold = 90
@@ -392,6 +447,8 @@ def evaluate_width(width, pulse_shape, pulse_type):
         threshold = 90
         end_idx = np.argmax(sample_times >= center_time + 2 * width)
         mismatch = np.abs(populations[end_idx:, 0])
+    
+    # If a sufficiently low mismatch is found, return the width and the time
     if np.percentile(mismatch, threshold) < tolerance:
         return width, sample_times[end_idx]
     else:
@@ -399,14 +456,18 @@ def evaluate_width(width, pulse_shape, pulse_type):
 
 # Find the correct width for a given pulse shape and type.
 def preoptimize_pulse(pulse_shape, pulse_type, initial_width=10e-6):
+
+    # Check if the pulse shape and type are valid
     if pulse_shape not in ["gaus", "box", "sech"]:
         raise ValueError("Implemented shape: gaus, box or sech")
     if pulse_type not in ["bs", "m"]:
         raise ValueError("bs for beam-splitter or m for mirror")
+    
+    # Initialize the search for an optimal width
     widths = np.arange(initial_width, duration / 2, 0.5 * duration / time_count)
     found_width = None
-    found_target_unitary = None
-    found_target_index = None
+
+    # Use a multithreading search to find the optimal width
     with ProcessPoolExecutor(max_workers=cpu_count()-3) as executor:
         future_to_width = {
             executor.submit(evaluate_width, w, pulse_shape, pulse_type): w
@@ -432,6 +493,8 @@ def preoptimize_pulse(pulse_shape, pulse_type, initial_width=10e-6):
                     future.result() 
             except (CancelledError, Exception):
                 pass
+    
+    # If a valid width is found
     if found_width is not None:
         graph = bo.Graph()
         result = calculate_evolution(graph=graph, Delta_signal=const_pwc(graph, Delta),
@@ -444,11 +507,15 @@ def preoptimize_pulse(pulse_shape, pulse_type, initial_width=10e-6):
         target_index = np.searchsorted(sample_times, found_condition_time)
         target_unitary = np.array(unitaries[target_index])
         return found_width, target_unitary, target_index
+    
+    # If no valid width is found
     print("Condition not reached within max pulse width. Increase Rabi frequencies or duration.")
     return None, None, None
 
 # Single optimization for one learning rate
 def single_optimisation(learning_rate, pulse_shape, pulse_type, sigma_p, sigma_b, noise_max, width, nb_iter):
+
+    # Initialze the graph and the optimization variables
     graph = bo.Graph()
     Omega_1_var = graph.optimizable_scalar(lower_bound=Omega_1 * 0.1, upper_bound=Omega_1 * 10, name="Omega_1",
                                             initial_values=Omega_1)
@@ -460,22 +527,36 @@ def single_optimisation(learning_rate, pulse_shape, pulse_type, sigma_p, sigma_b
         pwc=graph.real_optimizable_pwc_signal(segment_count=time_count // 100,
              duration=duration, maximum=delta_max, minimum=0, name="predelta"),
         kernel=graph.sinc_convolution_kernel(1 / width), segment_count=time_count, name="delta")
+    
+    # Generate the momentum and intensity distributions
     batch_dim = 1
     momentum, batch_dim = momentum_distribution(graph, sigma=sigma_p, batch_dim=batch_dim)
     betas, batch_dim = intensity_distribution(graph, sigma=sigma_b, batch_dim=batch_dim)
+
+    # Generate the phase noise signals
     random_phi_1 = phase_noise(graph, noise_max=noise_max)
     random_phi_2 = phase_noise(graph, noise_max=noise_max)
+
+    # Create the laser pulses
     pulse1 = pulse(graph, pulse_shape, tau, Omega_1_var, name="pulse1")
     pulse2 = pulse(graph, pulse_shape, tau, Omega_2_var, name="pulse2")
+
+    # Set the Hamiltonian and calculate the unitaries
     hamiltonian = set_hamiltonian(graph, const_pwc(graph, Delta), delta_signal,
                                   pulse1, pulse2, momentum, betas, random_phi_1, random_phi_2)
     unitaries = calculate_unitary(graph, hamiltonian)
+
+    # Reduce the dimensionality of the unitaries
     for non_null in [sigma_p != 0.0, sigma_b != 0.0]:
         if non_null:
             unitaries = graph.sum(unitaries, axis=0)
     unitaries = unitaries / ((momentum_batch if sigma_p else 1) *
                                       (intensity_batch if sigma_b else 1))
+    
+    # Calculate the cost based on the unitaries
     cost = calculate_cost_states(graph, pulse_type, unitaries)
+
+    # Run the optimization using Adam optimizer 
     result = bo.run_stochastic_optimization(
         graph=graph,
         cost_node_name="cost",
@@ -483,6 +564,7 @@ def single_optimisation(learning_rate, pulse_shape, pulse_type, sigma_p, sigma_b
         optimizer=bo.stochastic.Adam(learning_rate),
         cost_history_scope="HISTORICAL_BEST",
         iteration_count=nb_iter)
+    
     del graph, hamiltonian, unitaries, cost
     gc.collect()
     return learning_rate, result
@@ -490,11 +572,15 @@ def single_optimisation(learning_rate, pulse_shape, pulse_type, sigma_p, sigma_b
 # Main function to optimize the pulse
 def optimize_pulse(pulse_shape="gaus", pulse_type="bs", sigma_p=0.0, sigma_b=0.0,
                    noise_max=0.0, width=None, target_unitary=None, target_index=None):
+    
+    # Find the optimal width and target unitary for the ideal system if not provided
     if None in (width, target_unitary, target_index):
         w, t_u, t_i = preoptimize_pulse(pulse_shape=pulse_shape, pulse_type=pulse_type)
         width = width or w
         target_unitary = target_unitary or t_u
         target_index = target_index or t_i
+
+    # Calculate the evolution of the real system
     if sigma_p > 0.0 or sigma_b > 0.0 or noise_max > 0.0:
         graph = bo.Graph()
         result = calculate_evolution(graph=graph, Delta_signal=const_pwc(graph, Delta),
@@ -503,8 +589,11 @@ def optimize_pulse(pulse_shape="gaus", pulse_type="bs", sigma_p=0.0, sigma_b=0.0
             noise_max=noise_max, output_node_names=["states", "unitaries"])
         plotting(result, sigma_p=sigma_p, sigma_b=sigma_b, noise_max=noise_max,
                  pulse_shape=pulse_shape, pulse_type=pulse_type, what="states", when="before")
+    
     # print("Starting optimization...")
     result = {}
+
+    # Multithreaded optimization for different learning rates
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         future_to_lr = {executor.submit(single_optimisation, lr, pulse_shape, pulse_type, sigma_p, sigma_b,
                             noise_max, width, nb_iterations): 
@@ -525,14 +614,21 @@ def optimize_pulse(pulse_shape="gaus", pulse_type="bs", sigma_p=0.0, sigma_b=0.0
             except (CancelledError, Exception):
                 pass
     time.sleep(1)
+
+    # Find the best learning rate based on the cost
     best_lr = min(result, key=lambda lr: result[lr]["cost"])
     # print(f"Best learning rate found: {best_lr} with cost = {result[best_lr]['cost']:.4e}")
+
+    # Plot the cost history for all learning rates
     plotting(result, sigma_p=sigma_p, sigma_b=sigma_b, noise_max=noise_max,
              pulse_shape=pulse_shape, pulse_type=pulse_type, what="cost")
-    # print("Restarting optimization with best learning rate...")
+    
+    # Restart the optimization with the best learning rate
     lr, final_result = single_optimisation(
         best_lr, pulse_shape, pulse_type, sigma_p, sigma_b,
         noise_max, width, 2 * nb_iterations)
+    
+    # Retrive all the values from the final result
     plotting({best_lr: final_result}, sigma_p=sigma_p, sigma_b=sigma_b, noise_max=noise_max,
              pulse_shape=pulse_shape, pulse_type=pulse_type, what="controls")
     plotting({best_lr: final_result}, sigma_p=sigma_p, sigma_b=sigma_b, noise_max=noise_max,
@@ -541,12 +637,16 @@ def optimize_pulse(pulse_shape="gaus", pulse_type="bs", sigma_p=0.0, sigma_b=0.0
     Omega_2_opt = final_result["output"]["Omega_2"]["value"]
     tau_opt = final_result["output"]["tau"]["value"]
     delta_opt = final_result["output"]["delta"]["values"]
+
+    # Save the optimized parameters to a file
     save_dir = "data"
     os.makedirs(save_dir, exist_ok=True)
     filename = f"{save_dir}/params_{pulse_type}_{pulse_shape}_p{sigma_p}_b{sigma_b}_n{noise_max}.pkl"
     with open(filename, "wb") as f:pickle.dump({"Omega_1": Omega_1_opt,"Omega_2": Omega_2_opt,
             "tau": tau_opt,"delta": delta_opt, "learning_rate": best_lr}, f)
     # print(f"Saved optimized parameters to {filename}")
+
+    # Calculate the evolution of the system with the optimized parameters
     graph = bo.Graph()
     result_evol = calculate_evolution(graph=graph, Delta_signal=const_pwc(graph, Delta),
         delta_signal=graph.pwc_signal(values=delta_opt, duration=duration),
@@ -563,6 +663,20 @@ def optimize_pulse(pulse_shape="gaus", pulse_type="bs", sigma_p=0.0, sigma_b=0.0
 
 ### MAIN EXECUTION
 
+# Estimate the number of workers based on available resources (NOT IMPLEMENTED)
+def estimate_number_workers(time_count, nb_iterations):
+    available_memory = psutil.virtual_memory().available
+    max_workers = cpu_count() // 2
+    print("The logic for it has not been implemented yet and is using default value.") 
+    return min(cpu_count-2, max_workers)
+
+# Initialize the optimization parameters
+def initialize_optimization(log_min, log_max):
+    global max_workers, learning_rates
+    max_workers = estimate_number_workers(time_count, nb_iterations)
+    learning_rates = np.logspace(log_min, log_max, num=max_workers, base=10.0)
+
+# Force cleanup of resources to avoid memory leaks
 def force_cleanup():
     plt.close('all')
     for _ in range(3):
@@ -581,7 +695,7 @@ def force_cleanup():
         pass
     time.sleep(2)
 
-# Simplify the execution of all pulse
+# Simplify the execution for all pulses
 def run_all_pulses(sigma_p, sigma_b, noise_max):
     start = time.time()
     for shape in ["gaus", "box", "sech"]:
@@ -592,15 +706,21 @@ def run_all_pulses(sigma_p, sigma_b, noise_max):
             gc.collect()
     print(f"Execution completed in {time.time() - start:.2f} seconds.")
             
+# Main part of the script           
 if __name__ == "__main__":
+
+    # Set up signal handlers for cleanup on termination
     def signal_handler(signum, frame):
         force_cleanup()
         sys.exit(0)
-    
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
+    # Start of the calculations
     total_start = time.time()
+    initialize_optimization(log_min=-3, log_max=0)
+
+    # Change this to have various optimizations 
     # Momentum optimization
     run_all_pulses(sigma_p=0.01, sigma_b=0.0, noise_max=0.0)
     run_all_pulses(sigma_p=0.1, sigma_b=0.0, noise_max=0.0)
@@ -622,5 +742,7 @@ if __name__ == "__main__":
     # Both intensity and phase noise optimization
     run_all_pulses(sigma_p=0.0, sigma_b=0.3, noise_max=1e-4)
 
+
+    # End of the calculations
     force_cleanup()
     print("Total execution time for all pulses: {:.2f} seconds.".format(time.time() - total_start))
