@@ -240,6 +240,7 @@ def pulse(graph, pulse_shape, width, amplitude, name="pulse"):
     else:
         raise ValueError("Shape not implemented. Choose 'gaus', 'box' or 'sech'.")
 
+### SIGNALS
 
 # Return a constant piecewise constant signal equal to value
 def const_pwc(graph, value):
@@ -344,6 +345,7 @@ def calculate_cost_states(graph, pulse_type, unitaries):
 
 ### PLOTTING
 
+# Main function for plotting whatever is needed
 def plotting(result, sigma_p=0.0, sigma_b=0.0, noise_max=0.0,
              pulse_shape="gaus", pulse_type="bs", what="states", when="before"):
     
@@ -421,6 +423,8 @@ def plotting(result, sigma_p=0.0, sigma_b=0.0, noise_max=0.0,
     param_file_path = os.path.join(param_path, filename)
     plt.savefig(shape_file_path, dpi=600, bbox_inches='tight')
     plt.savefig(param_file_path, dpi=600, bbox_inches='tight')
+
+    # Mr. Clean time
     plt.close(fig)
     plt.clf()
     gc.collect()
@@ -469,7 +473,7 @@ def preoptimize_pulse(pulse_shape, pulse_type, initial_width=10e-6):
     widths = np.arange(initial_width, duration / 2, 0.5 * duration / time_count)
     found_width = None
 
-    # Use a multithreading search to find the optimal width
+    # Multithreaded search to find the optimal width
     with ProcessPoolExecutor(max_workers=cpu_count()-3) as executor:
         future_to_width = {
             executor.submit(evaluate_width, w, pulse_shape, pulse_type): w
@@ -508,6 +512,7 @@ def preoptimize_pulse(pulse_shape, pulse_type, initial_width=10e-6):
         unitaries = result["output"]["unitaries"]["value"]
         target_index = np.searchsorted(sample_times, found_condition_time)
         target_unitary = np.array(unitaries[target_index])
+
         return found_width, target_unitary, target_index
     
     # If no valid width is found
@@ -572,8 +577,10 @@ def single_optimisation(learning_rate, target_unitary, target_index, pulse_shape
         cost_history_scope="HISTORICAL_BEST",
         iteration_count=nb_iter)
     
+    # Mr. Clean time
     del graph, hamiltonian, unitaries, cost
     gc.collect()
+
     return learning_rate, result
 
 # Main function to optimize the pulse
@@ -663,6 +670,8 @@ def optimize_pulse(pulse_shape="gaus", pulse_type="bs", sigma_p=0.0, sigma_b=0.0
     plotting(result_evol, sigma_p=sigma_p, sigma_b=sigma_b, noise_max=noise_max,
              pulse_shape=pulse_shape, pulse_type=pulse_type, what="states",
              when=f"after_lr_{best_lr}")
+    
+    # Mr. Clean time
     del result_evol, graph, final_result, result
     gc.collect()
     plt.close('all')
@@ -678,10 +687,10 @@ def estimate_number_workers(time_count, nb_iterations):
     return min(cpu_count-2, max_workers)
 
 # Initialize the optimization parameters
-def initialize_optimization(log_min, log_max):
+def initialize_optimization(lr_log_min, lr_log_max):
     global max_workers, learning_rates
     max_workers = estimate_number_workers(time_count, nb_iterations)
-    learning_rates = np.logspace(log_min, log_max, num=max_workers, base=10.0)
+    learning_rates = np.logspace(lr_log_min, lr_log_max, num=max_workers, base=10.0) 
 
 # Force cleanup of resources to avoid memory leaks
 def force_cleanup():
@@ -689,7 +698,6 @@ def force_cleanup():
     for _ in range(3):
         gc.collect()
     try:
-        current_process = mp.current_process()
         for child in mp.active_children():
             try:
                 child.terminate()
@@ -700,7 +708,7 @@ def force_cleanup():
                 pass
     except:
         pass
-    time.sleep(2)
+    time.sleep(1)
 
 # Simplify the execution for all pulses
 def run_all_pulses(sigma_p, sigma_b, noise_max):
@@ -725,7 +733,7 @@ if __name__ == "__main__":
 
     # Start of the calculations
     total_start = time.time()
-    initialize_optimization(log_min=-3, log_max=0)
+    initialize_optimization(lr_log_min=-3, lr_log_max=0)
 
 
     # Momentum optimization
