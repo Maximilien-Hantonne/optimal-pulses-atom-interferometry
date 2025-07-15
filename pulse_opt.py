@@ -86,6 +86,8 @@ sample_times = np.linspace(0, duration, time_count)
 max_workers = None   # Number of workers for parallel processing
 learning_rates = None # Learning rates for optimization
 nb_iterations = 4000 # Number of iterations for optimization
+cost_type = "states"
+# cost_type = "unitaries"
 
 ### BATCH DIMENSIONS
 
@@ -513,7 +515,7 @@ def preoptimize_pulse(pulse_shape, pulse_type, initial_width=10e-6):
     return None, None, None
 
 # Single optimization for one learning rate
-def single_optimisation(learning_rate, pulse_shape, pulse_type, sigma_p, sigma_b, noise_max, width, nb_iter):
+def single_optimisation(learning_rate, target_unitary, target_index, pulse_shape, pulse_type, sigma_p, sigma_b, noise_max, width, nb_iter):
 
     # Initialze the graph and the optimization variables
     graph = bo.Graph()
@@ -553,10 +555,15 @@ def single_optimisation(learning_rate, pulse_shape, pulse_type, sigma_p, sigma_b
     unitaries = unitaries / ((momentum_batch if sigma_p else 1) *
                                       (intensity_batch if sigma_b else 1))
     
-    # Calculate the cost based on the unitaries
-    cost = calculate_cost_states(graph, pulse_type, unitaries)
+    # Calculate the cost
+    if cost_type == "unitaries":
+        # target_index = np.min(np.searchsorted(sample_times, center_time + 2 * tau), time_count - 1)
+        unitary = calculate_unitary(graph, hamiltonian)[target_index]
+        cost = calculate_cost_unitaries(graph, unitary, target_unitary)
+    elif cost_type == "states":
+        cost = calculate_cost_states(graph, pulse_type, unitaries)
 
-    # Run the optimization using Adam optimizer 
+    # Run the optimization using an Adam optimizer 
     result = bo.run_stochastic_optimization(
         graph=graph,
         cost_node_name="cost",
@@ -595,7 +602,7 @@ def optimize_pulse(pulse_shape="gaus", pulse_type="bs", sigma_p=0.0, sigma_b=0.0
 
     # Multithreaded optimization for different learning rates
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        future_to_lr = {executor.submit(single_optimisation, lr, pulse_shape, pulse_type, sigma_p, sigma_b,
+        future_to_lr = {executor.submit(single_optimisation, lr, target_unitary, target_index, pulse_shape, pulse_type, sigma_p, sigma_b,
                             noise_max, width, nb_iterations): 
                             lr for lr in learning_rates}
         for future in as_completed(future_to_lr):
@@ -715,12 +722,12 @@ if __name__ == "__main__":
         sys.exit(0)
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    
+
     # Start of the calculations
     total_start = time.time()
     initialize_optimization(log_min=-3, log_max=0)
 
-    # Change this to have various optimizations 
+
     # Momentum optimization
     run_all_pulses(sigma_p=0.01, sigma_b=0.0, noise_max=0.0)
     run_all_pulses(sigma_p=0.1, sigma_b=0.0, noise_max=0.0)
