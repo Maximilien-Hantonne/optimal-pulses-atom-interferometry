@@ -72,22 +72,22 @@ Omega_1 = 2 * np.pi * 2.0e6 # Rabi frequency for the first transition
 Omega_2 = 2 * np.pi * 2.0e6 # Rabi frequency for the second transition
 phi_1 = 2 * np.pi * 0.0 # Phase for the first laser
 phi_2 = 2 * np.pi * 0.0  # Phase for the second laser
-k_eff = 2 * np.pi / 780e-9  
+k_eff = 2 * np.pi / 780e-9  # Effective wavevector
 
 ### TIME PARAMETERS
 
 time_count = 5000 # Number of time samples
 duration = 700e-6 # Total duration of the simulation
 center_time = duration / 2
-sample_times = np.linspace(0, duration, time_count)
+sample_times = np.linspace(0, duration, time_count) 
 
 ### OPIMIZATION PARAMETERS
 
 max_workers = None   # Number of workers for parallel processing
 learning_rates = None # Learning rates for optimization
 nb_iterations = 4000 # Number of iterations for optimization
-cost_type = "states"
-# cost_type = "unitaries"
+cost_type = "states" # Type of cost function to use
+# cost_type = "unitaries" # Type of cost function to use
 
 ### BATCH DIMENSIONS
 
