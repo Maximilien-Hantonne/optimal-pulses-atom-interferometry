@@ -5,7 +5,7 @@ This repository contains two main Python scripts for quantum pulse optimization 
 ## Files Overview
 
 - **`pulse_opt.py`**: Main optimization script for quantum pulse parameters
-- **`pulse_opt_doc.py`**: Comprehensive documentation and helper functions for pulse optimization
+- **`pulse_opt_doc.py`**: Documentation and helper functions for pulse optimization
 - **`infidelity_map.py`**: Analysis script for generating infidelity maps across parameter spaces
 - **`infidelity_maps_plots/`**: Directory containing pre-computed infidelity maps for reference
 - **`README.md`**: This documentation file
@@ -37,10 +37,8 @@ pip install qctrlvisualizer
 ### System Requirements
 
 - **Python**: 3.8 or higher
-- **Memory**: Minimum 8GB RAM (16GB+ recommended for large parameter sweeps)
 - **CPU**: Multi-core processor (both scripts utilize parallel processing)
-- **Disk Space**: Several GB for output plots and data files
-
+  
 ### Python Dependencies
 
 Install the required packages using pip:
@@ -86,7 +84,7 @@ Delta = 2 * np.pi * 1.0e8               # Single-photon detuning (rad/s)
 ```
 
 ### Documentation and Helper Functions
-The main script is supported by comprehensive documentation in `pulse_opt_doc.py` which provides:
+The main script is supported by the documentation in `pulse_opt_doc.py` which provides:
 
 - **Function Documentation**: Documentation for all functions
 - **Helper Functions**: Utilities for parameter sweeps, time estimation, and experiment planning
@@ -131,7 +129,7 @@ print(get_function_help("momentum_distribution"))
 
 1. **Pre-optimization**: Finds initial pulse width for target gate operation
 2. **Parallel optimization**: Tests multiple learning rates simultaneously using `ProcessPoolExecutor`
-3. **Parameter optimization**: Rabi frequencies (Ω₁, Ω₂), pulse duration (τ), two-photon detuning profile (δ(t))
+3. **Parameter optimization**: Rabi frequencies, pulse duration, two-photon detuning profile
 4. **Final optimization**: Extended optimization with best learning rate
 
 ### Output Files
@@ -152,7 +150,7 @@ plots/
 #### Data Files
 - **Location**: `data/` directory
 - **Format**: Pickle files (`.pkl`)
-- **Content**: Optimized parameters (Ω₁, Ω₂, τ, δ(t), learning_rate)
+- **Content**: Optimized parameters
 - **Naming**: `params_{pulse_type}_{pulse_shape}_p{sigma_p}_b{sigma_b}_n{noise_max}.pkl`
 
 
@@ -190,38 +188,37 @@ noise_values = np.logspace(-12, -3, n)   # 10^-12 to 10^-3 rad²/Hz
 ### Map Types 
 
 #### 1. Momentum-Noise Maps (`mn_map`)
-- **X-axis**: Phase noise spectral density maximum (10^-12 to 10^-3 rad²/Hz)
-- **Y-axis**: Momentum spread (10^-6 to 1 ℏk_eff units)
+- **X-axis**: Phase noise spectral density maximum
+- **Y-axis**: Momentum spread 
 - **Function**: How phase noise and atomic thermal motion affect gate fidelity
 - **Use case**: Optimizing laser coherence vs atomic cooling requirements
 
 #### 2. Momentum-Beta Maps (`mb_map`)
-- **X-axis**: Beta - intensity factor (0.01 to 1.0, linear scale)
-- **Y-axis**: Momentum spread (10^-6 to 1 ℏk_eff units, log scale)
+- **X-axis**: Beta - intensity factor
+- **Y-axis**: Momentum spread
 - **Function**: Impact of laser intensity variations and atomic motion
 - **Use case**: Beam profile optimization and atomic cloud size effects
 
 #### 3. Beta-Noise Maps (`bn_map`)
-- **X-axis**: Phase noise spectral density maximum (10^-12 to 10^-3 rad²/Hz)
-- **Y-axis**: Beta - intensity factor (0.01 to 1.0, linear scale)
+- **X-axis**: Phase noise spectral density maximum
+- **Y-axis**: Beta - intensity factor
 - **Function**: Combined effect of intensity and phase fluctuations
 - **Use case**: Laser system stability requirements
 
 ### Key Features
 
 - **Pre-computed pulse durations**: Uses optimized pulse widths
-- **Fixed pulse shape**: Gaussian pulses only (optimized for this application)
-- **Parallel computation**: Uses `process_map` with `cpu_count()-1` workers
+- **Pulse shape**: Gaussian 
+- **Parallel computation**: Uses `process_map` with `cpu_count()-3` workers
 - **Gaussian filtering**: Smooths infidelity maps (σ=2) for visual clarity
 - **Logarithmic visualization**: Uses `LogNorm` for better dynamic range display
-- **High resolution**: Default 50×50 parameter grids (2500 calculations per map)
-- **Automatic cleanup**: Comprehensive memory management and process cleanup
+- **Resolution**: Default 50×50 parameter grids (2500 calculations per map)
 
 ### Analysis Process
 
-1. **Target gate computation**: Calculate ideal unitary evolution (no noise)
+1. **Target gate computation**: Calculate ideal unitary evolution
 2. **Real gate computation**: Calculate actual evolution with specified noise parameters
-3. **Gate infidelity calculation**: Compare target vs real using trace fidelity metric
+3. **Gate infidelity calculation**: Compare target vs real unitary
 4. **Minimum selection**: Extract minimum infidelity from second half of pulse
 5. **Map generation**: Collect results across parameter grid and apply Gaussian smoothing
 
