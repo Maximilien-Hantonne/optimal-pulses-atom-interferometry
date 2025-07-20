@@ -415,14 +415,13 @@ def plotting(result, sigma_p=0.0, sigma_b=0.0, noise_max=0.0,
         lr = list(result.keys())[0]
         qv.plot_controls({"Pulse 1": result[lr]["output"]["pulse1"], "Pulse 2": result[lr]["output"]["pulse2"],}, 
                          figure=fig)
-        filename_parts.append("pulses.png")
+        filename_parts.append(f"pulses" + f"_{when}.png")
     
     # Saving the figure
     filename = "_".join(filename_parts)
     shape_file_path = os.path.join(shape_path, filename)
     param_file_path = os.path.join(param_path, filename)
     plt.savefig(shape_file_path, dpi=600, bbox_inches='tight')
-    plt.savefig(param_file_path, dpi=600, bbox_inches='tight')
 
     # Mr. Clean time
     plt.close(fig)
@@ -442,15 +441,15 @@ def evaluate_width(width, pulse_shape, pulse_type):
         noise_max=0.0, output_node_names=["states"])
     populations = np.abs(result["output"]["states"]["value"].squeeze()) ** 2
 
+    # Set the tolerance and threshold to the wanted population mismatch
+    tolerance = 0.0005
+    threshold = 90
+
     # Calculate the mismatch between populations and the target state
     if pulse_type == "bs":
-        tolerance = 0.0005
-        threshold = 90
         end_idx = np.argmax(sample_times >= center_time + 2 * width)
         mismatch = np.abs(populations[end_idx:, 0] - populations[end_idx:, 2])
     elif pulse_type == "m":
-        tolerance = 0.0005
-        threshold = 90
         end_idx = np.argmax(sample_times >= center_time + 2 * width)
         mismatch = np.abs(populations[end_idx:, 0])
     
@@ -473,8 +472,8 @@ def preoptimize_pulse(pulse_shape, pulse_type, initial_width=10e-6):
     widths = np.arange(initial_width, duration / 2, 0.5 * duration / time_count)
     found_width = None
 
-    # Multithreaded search to find the optimal width
-    with ProcessPoolExecutor(max_workers=cpu_count()-3) as executor:
+    # Multiprocessing search to find the optimal width
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
         future_to_width = {
             executor.submit(evaluate_width, w, pulse_shape, pulse_type): w
             for w in widths}
@@ -506,8 +505,10 @@ def preoptimize_pulse(pulse_shape, pulse_type, initial_width=10e-6):
         result = calculate_evolution(graph=graph, Delta_signal=const_pwc(graph, Delta),
             delta_signal=const_pwc(graph, delta), Omega1=Omega_1, Omega2=Omega_2,
             pulse_shape=pulse_shape, width=found_width, sigma_p=0.0, sigma_b=0.0, 
-            noise_max=0.0, output_node_names=["states", "unitaries"])
+            noise_max=0.0, output_node_names=["states", "unitaries", "pulse1", "pulse2"])
         plotting(result, pulse_shape=pulse_shape, pulse_type=pulse_type, what="states", 
+                 when="before")
+        plotting(result, pulse_shape=pulse_shape, pulse_type=pulse_type, what="controls",
                  when="before")
         unitaries = result["output"]["unitaries"]["value"]
         target_index = np.searchsorted(sample_times, found_condition_time)
@@ -607,7 +608,7 @@ def optimize_pulse(pulse_shape="gaus", pulse_type="bs", sigma_p=0.0, sigma_b=0.0
     # print("Starting optimization...")
     result = {}
 
-    # Multithreaded optimization for different learning rates
+    # Multiprocessing optimization for different learning rates
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         future_to_lr = {executor.submit(single_optimisation, lr, target_unitary, target_index, pulse_shape, pulse_type, sigma_p, sigma_b,
                             noise_max, width, nb_iterations): 
@@ -644,7 +645,7 @@ def optimize_pulse(pulse_shape="gaus", pulse_type="bs", sigma_p=0.0, sigma_b=0.0
     
     # Retrive all the values from the final result
     plotting({best_lr: final_result}, sigma_p=sigma_p, sigma_b=sigma_b, noise_max=noise_max,
-             pulse_shape=pulse_shape, pulse_type=pulse_type, what="controls")
+             pulse_shape=pulse_shape, pulse_type=pulse_type, what="controls", when="after")
     plotting({best_lr: final_result}, sigma_p=sigma_p, sigma_b=sigma_b, noise_max=noise_max,
              pulse_shape=pulse_shape, pulse_type=pulse_type, what="cost", when="best_lr")
     Omega_1_opt = final_result["output"]["Omega_1"]["value"]
