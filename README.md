@@ -101,20 +101,22 @@ print(help_text)
 
 # Get system information
 print_system_overview()      # Physical system overview
+print_parameter_guidelines() # Parameter selection guide
 print_troubleshooting()      # Problem-solving guide
 
 # Get help for specific functions
 print(get_function_help("optimize_pulse"))
 print(get_function_help("preoptimize_pulse"))
-print(get_function_help("momentum_distribution"))
+print(get_function_help("momentum_distribution")))
 ```
 
 ### Key Features
 
 #### Pulse Shapes
-- **Gaussian**: `pulse_shape="gaus"`
-- **Box**: `pulse_shape="box"` 
-- **Hyperbolic Secant**: `pulse_shape="sech"`
+- **Gaussian**: `pulse_shape="gaus"` (smooth envelope, good convergence)
+- **Box**: `pulse_shape="box"` (rectangular with tanh edges, fast transitions)
+- **Hyperbolic Secant**: `pulse_shape="sech"` (optimal for certain operations)
+- **Free Shape**: `pulse_shape="free"` (fully optimizable envelope, maximum flexibility)
 
 #### Gate Types
 - **Beam-splitter**: `pulse_type="bs"` (creates superposition states)
@@ -127,10 +129,13 @@ print(get_function_help("momentum_distribution"))
 
 ### Optimization Process
 
-1. **Pre-optimization**: Finds initial pulse width for target gate operation
+1. **Pre-optimization**: Automatically finds initial pulse width for target gate operation
 2. **Parallel optimization**: Tests multiple learning rates simultaneously using `ProcessPoolExecutor`
-3. **Parameter optimization**: Rabi frequencies, pulse duration, two-photon detuning profile
-4. **Final optimization**: Extended optimization with best learning rate
+3. **Parameter optimization**: 
+   - **Parametric shapes** (gaus, box, sech): Optimizes Rabi frequencies, pulse duration, and two-photon detuning profile
+   - **Free shape**: Optimizes complete pulse envelopes directly with time-dependent detuning
+4. **Best learning rate selection**: Chooses optimal learning rate based on cost function
+5. **Extended optimization**: Final optimization with 2× iterations using best learning rate
 
 ### Output Files
 
@@ -143,14 +148,17 @@ plots/
 │   └── ...
 └── parameters/
     ├── perfect/                   # Cross-comparison by parameter set
-    ├── p_0.01/
+    ├── p_0.01/                   # All shapes with momentum spread
+    ├── p_0.3_n_1e-4/             # Combined momentum + phase noise
     └── ...
 ```
 
 #### Data Files
 - **Location**: `data/` directory
 - **Format**: Pickle files (`.pkl`)
-- **Content**: Optimized parameters
+- **Content**: Optimized parameters (different for parametric vs free shapes)
+  - **Parametric shapes**: Omega_1, Omega_2, tau (pulse width), delta(t) profile
+  - **Free shapes**: pulse1(t), pulse2(t) envelopes, delta(t) profile
 - **Naming**: `params_{pulse_type}_{pulse_shape}_p{sigma_p}_b{sigma_b}_n{noise_max}.pkl`
 
 
@@ -239,7 +247,10 @@ noise_values = np.logspace(-12, -3, n)   # 10^-12 to 10^-3 rad²/Hz
 ### For pulse_opt.py (Optimization)
 - **Memory**: Use smaller `time_count` (try 2000-3000) for initial testing
 - **CPU usage**: Adjust `max_workers` based on available cores (default: cpu_count()//2)
-- **Optimization time**: Typical runs take 30 min to several hours depending on parameters
+- **Optimization time**: 
+  - Parametric shapes: 15-45 minutes per parameter set
+  - Free shapes: 30-90 minutes per parameter set (higher dimensional optimization)
+- **Free shape considerations**: Requires more iterations (4000-8000) and memory
 
 ### For infidelity_map.py
 - **Memory**: Use smaller grid resolution (`n < 50`) for initial testing
@@ -252,11 +263,17 @@ noise_values = np.logspace(-12, -3, n)   # 10^-12 to 10^-3 rad²/Hz
 ### pulse_opt.py Parameter Ranges
 
 ```python
+# Pulse shapes (choose one)
+pulse_shape = "gaus"  # Gaussian (default, good convergence)
+pulse_shape = "box"   # Box with smooth edges
+pulse_shape = "sech"  # Hyperbolic secant
+pulse_shape = "free"  # Fully optimizable (requires more iterations)
+
 # Momentum spread (thermal motion effects)
 sigma_p = 0.0    # Perfect cooling
 sigma_p = 0.01   # Good cooling (typical)
 sigma_p = 0.1    # Moderate cooling
-sigma_p = 0.3    # Poor cooling / hot atoms
+sigma_p = 0.3    # Poor cooling 
 
 # Intensity variations (beam profile effects)  
 sigma_b = 0.0    # Perfect uniform beam
@@ -265,7 +282,7 @@ sigma_b = 1.0    # Strong spatial variations
 
 # Phase noise (laser stability)
 noise_max = 0.0    # Perfect coherence
-noise_max = 1e-6   # Excellent laser (typical)
+noise_max = 1e-6   # Very good laser stability
 noise_max = 1e-4   # Good laser stability
 noise_max = 1e-2   # Poor laser stability
 ```
