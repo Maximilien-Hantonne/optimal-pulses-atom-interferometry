@@ -43,6 +43,37 @@ Target Operations:
 - Mirror (m): |0⟩ → |2⟩
 """
 
+PARAMETER_GUIDELINES = """
+Parameter Selection Guidelines
+=============================
+
+Pulse Shapes:
+------------
+- "gaus": Gaussian envelope, smooth, good for general optimization
+- "box": Rectangular envelope with smooth edges, fast transitions
+- "sech": Hyperbolic secant, optimal for certain quantum operations
+- "free": Fully optimizable shape, maximum flexibility but slower convergence
+
+Noise Parameters:
+----------------
+- sigma_p: Momentum spread (0.01-0.3 typical, 0.0 = no Doppler effects)
+- sigma_b: Intensity variation (0.3-3.0 typical, 0.0 = uniform beam)
+- noise_max: Phase noise amplitude (1e-6 to 1e-2 rad, 0.0 = perfect coherence)
+
+Optimization Settings:
+---------------------
+- learning_rate: 1e-4 to 1e-1 (auto-selected from range)
+- nb_iterations: 2000-8000 (more for complex optimization)
+- time_count: 2000-5000 (higher for better resolution)
+- duration: 100e-6 to 1000e-6 seconds
+
+Resource Management:
+-------------------
+- max_workers: cpu_count()//2 to cpu_count()-2
+- Memory usage scales with: time_count × batch_dimensions × max_workers
+- Reduce parameters if memory issues occur
+"""
+
 # =============================================================================
 # NOISE AND DISTRIBUTION FUNCTIONS
 # =============================================================================
@@ -92,12 +123,13 @@ def phase_noise_doc():
 
 def pulse_doc():
     """
-    * @brief Generate laser pulse envelopes with different temporal shapes (Gaussian, box, sech).
+    * @brief Generate laser pulse envelopes with different temporal shapes (Gaussian, box, sech, free).
     * Creates piecewise constant signals for Boulder Opal optimization with smooth temporal profiles.
     * Pulse area Theta = ∫ Omega(t) dt determines rotation angle for quantum gate operations.
+    * Free shape uses real_optimizable_pwc_signal for completely flexible pulse optimization.
     *
     * @param graph Boulder Opal graph object for tensor operations.
-    * @param pulse_shape Temporal shape: "gaus", "box", or "sech".
+    * @param pulse_shape Temporal shape: "gaus", "box", "sech", or "free".
     * @param width Pulse duration in seconds (typical 10-100 microseconds).
     * @param amplitude Peak Rabi frequency in rad/s (typical 2*pi*1MHz).
     * @param name Signal name identifier (default "pulse").
@@ -156,13 +188,12 @@ def calculate_evolution_doc():
     * @param graph Boulder Opal graph object for tensor operations.
     * @param Delta_signal One-photon detuning profile as pwc_signal.
     * @param delta_signal Two-photon detuning profile as pwc_signal.
-    * @param Omega1 First laser Rabi frequency in rad/s.
-    * @param Omega2 Second laser Rabi frequency in rad/s.
-    * @param pulse_shape Temporal pulse shape: "gaus", "box", or "sech".
-    * @param width Pulse width in seconds.
+    * @param pulse1 First laser pulse (None generates automatically based on pulse_shape).
+    * @param pulse2 Second laser pulse (None generates automatically based on pulse_shape).
     * @param sigma_p Momentum spread parameter (0=no Doppler effects).
     * @param sigma_b Intensity variation parameter (0=uniform beam).
     * @param noise_max Phase noise amplitude in radians (0=perfect coherence).
+    * @param output_node_names List of Boulder Opal output nodes to compute.
     * @return Dict with "states" |psi(t)⟩ and "unitaries" U(t) tensors.
     """
 
@@ -172,9 +203,10 @@ def calculate_evolution_doc():
 
 def calculate_cost_states_doc():
     """
-    * @brief Compute gate infidelity cost function for quantum gate optimization.
+    * @brief Compute gate infidelity cost function for quantum gate optimization using state fidelity.
     * Cost = (1/N) ∑ |1 - |⟨psi_target|U(tᵢ)|psi_0⟩|²|.
     * Target states: beam-splitter "bs" → (|1⟩ + |3⟩)/√2, mirror "m" → |3⟩.
+    * Averages fidelity over second half of time evolution for steady-state evaluation.
     *
     * @param graph Boulder Opal graph object for tensor operations.
     * @param pulse_type Gate type: "bs" (beam-splitter) or "m" (mirror).
@@ -182,14 +214,30 @@ def calculate_cost_states_doc():
     * @return Boulder Opal tensor - scalar cost value to minimize (0=perfect, 1=worst).
     """
 
+def calculate_cost_unitaries_doc():
+    """
+    * @brief Compute gate infidelity cost function using unitary fidelity at specific time.
+    * Cost = |1 - |Tr(U_target† @ U_achieved)|²/Tr(U_target† @ U_target)|².
+    * Alternative to state-based cost function, more direct for gate characterization.
+    * Used when cost_type="unitaries" in optimization settings.
+    *
+    * @param graph Boulder Opal graph object for tensor operations.
+    * @param unitaries Achieved unitary operator U from quantum evolution.
+    * @param target_unitaries Target unitary operator for gate operation.
+    * @return Boulder Opal tensor - scalar cost value to minimize (0=perfect, 1=worst).
+    """
+
 def single_optimisation_doc():
     """
     * @brief Perform pulse optimization using Adam optimizer for single learning rate.
-    * Optimizes Rabi frequencies Omega_1/Omega_2, pulse width tau, and time-dependent detuning delta(t).
+    * For standard shapes (gaus, box, sech): optimizes Rabi frequencies Omega_1/Omega_2, pulse width tau, and time-dependent detuning delta(t).
+    * For free shape: optimizes pulse envelopes directly and time-dependent detuning delta(t) with fixed amplitudes.
     * Uses automatic differentiation through quantum evolution with exact gradients.
     *
     * @param learning_rate Adam optimizer learning rate (typical 1e-3 to 1e-1).
-    * @param pulse_shape Temporal pulse shape: "gaus", "box", or "sech".
+    * @param target_unitary Target unitary operator for gate fidelity calculation.
+    * @param target_index Time index for unitary evaluation in cost function.
+    * @param pulse_shape Temporal pulse shape: "gaus", "box", "sech", or "free".
     * @param pulse_type Gate type: "bs" (beam-splitter) or "m" (mirror).
     * @param sigma_p Momentum spread parameter for Doppler effects.
     * @param sigma_b Intensity variation parameter for spatial effects.
@@ -203,15 +251,17 @@ def optimize_pulse_doc():
     """
     * @brief Master optimization function with two-stage strategy: learning rate survey then extended optimization.
     * Tests multiple learning rates in parallel, selects best, then runs fine-tuning with 2*nb_iterations.
+    * Handles both parametric shapes (gaus, box, sech) and free-form optimization.
     * Generates before/after plots, cost histories, and saves optimization results to .pkl files.
     *
-    * @param pulse_shape Temporal pulse shape: "gaus", "box", or "sech" (default "gaus").
+    * @param pulse_shape Temporal pulse shape: "gaus", "box", "sech", or "free" (default "gaus").
     * @param pulse_type Gate type: "bs" (beam-splitter) or "m" (mirror) (default "bs").
     * @param sigma_p Momentum spread parameter for Doppler effects (default 0.0).
     * @param sigma_b Intensity variation parameter for spatial effects (default 0.0).
     * @param noise_max Phase noise amplitude in radians (default 0.0).
     * @param width Optional pulse width override in seconds.
-    * @param target Optional target state override for custom gates.
+    * @param target_unitary Optional target unitary override for custom gates.
+    * @param target_index Optional target time index override.
     * @return Optimized pulses with plots and data files saved to organized directory structure.
     """
 
@@ -223,9 +273,10 @@ def preoptimize_pulse_doc():
     """
     * @brief Automatically determine optimal initial pulse width by testing range from initial_width to duration/2.
     * Success criteria: beam-splitter requires equal populations |P₁(t) - P₃(t)| < 0.0005, mirror requires P₁(t) < 0.0005.
+    * For free shape, uses Gaussian pulses for initial width determination, then switches to optimizable shape.
     * Uses parallel execution to test multiple widths and returns first achieving target fidelity.
     *
-    * @param pulse_shape Temporal pulse shape: "gaus", "box", or "sech".
+    * @param pulse_shape Temporal pulse shape: "gaus", "box", "sech", or "free".
     * @param pulse_type Gate type: "bs" (beam-splitter) or "m" (mirror).
     * @param initial_width Starting width for search in seconds (default 10e-6).
     * @return Tuple of (optimal_width, target_unitary, target_index) or (None, None, None) if no success.
@@ -259,6 +310,52 @@ def estimate_number_workers_doc():
     * @return int - optimal number of parallel workers for current system.
     """
 
+def initialize_optimization_doc():
+    """
+    * @brief Initialize global optimization parameters including worker count and learning rate grid.
+    * Sets up logarithmic learning rate range for parallel testing across available workers.
+    * Called once at start of main execution to configure multiprocessing optimization.
+    *
+    * @param lr_log_min Minimum learning rate exponent (e.g., -3 for 1e-3).
+    * @param lr_log_max Maximum learning rate exponent (e.g., 0 for 1e0).
+    * @return None - sets global max_workers and learning_rates arrays.
+    """
+
+def force_cleanup_doc():
+    """
+    * @brief Aggressively clean up system resources to prevent memory leaks and zombie processes.
+    * Closes matplotlib figures, forces garbage collection, terminates multiprocessing children.
+    * Used after optimization runs and in signal handlers for graceful shutdown.
+    *
+    * @param None
+    * @return None - performs cleanup operations with exception handling.
+    """
+
+def run_all_pulses_doc():
+    """
+    * @brief Execute complete pulse optimization for all shapes (gaus, box, sech, free) and gate types (bs, m).
+    * Systematic execution of 8 optimizations total with progress tracking and cleanup.
+    * Used for batch parameter sweeps and comprehensive characterization studies.
+    *
+    * @param sigma_p Momentum spread parameter for all optimizations.
+    * @param sigma_b Intensity variation parameter for all optimizations.
+    * @param noise_max Phase noise amplitude for all optimizations.
+    * @return None - optimized results saved to files, plots generated.
+    """
+
+def evaluate_width_doc():
+    """
+    * @brief Test specific pulse width for achieving target gate fidelity in ideal conditions.
+    * Used by preoptimize_pulse() to find initial width that satisfies success criteria.
+    * Success criteria: beam-splitter |P₁(end) - P₃(end)| < 0.0005, mirror P₁(end) < 0.0005.
+    * For free shape, uses Gaussian pulses for evaluation to maintain consistency.
+    *
+    * @param width Pulse width to test in seconds.
+    * @param pulse_shape Temporal pulse shape: "gaus", "box", "sech", or "free".
+    * @param pulse_type Gate type: "bs" (beam-splitter) or "m" (mirror).
+    * @return Tuple of (width, end_time) if successful, (None, None) if failed.
+    """
+
 # =============================================================================
 # MAIN EXECUTION AND WORKFLOW
 # =============================================================================
@@ -267,10 +364,12 @@ def main_execution_doc():
     """
     * @brief Orchestrate systematic pulse optimization across multiple noise parameters to characterize system performance.
     * Sequence: setup signal handlers → initialize parameters → systematic sweep (momentum, intensity, phase noise, combined effects) → test all pulse shapes and gate types.
+    * Parameter sweep includes: momentum (0.01, 0.1, 0.3), intensity (0.3, 1, 3), phase noise (1e-6, 1e-4, 1e-2), and combinations.
+    * For each parameter set, optimizes all 4 pulse shapes (gaus, box, sech, free) and 2 gate types (bs, m) = 8 optimizations per parameter set.
     * Generates organized output with plots and data files, requires 2-8 hours for complete characterization.
     *
     * @param None Automated parameter sweeps with predefined noise levels and pulse combinations.
-    * @return Complete analysis results saved to plots/ and data/ directories.
+    * @return Complete analysis results saved to plots/ and data/ directories with systematic organization.
     """
 
 # =============================================================================
@@ -290,21 +389,38 @@ Common Issues and Solutions
    - Insufficient iterations
    - Poor initial pulse width
    - Excessive noise
+   - Free shape requires more iterations
    
    Solutions:
    - Try different learning rates: [10⁻⁴, 10⁻³, 10⁻²]
    - Increase nb_iterations (double current value)
+   - For free shape: use 4000-8000 iterations
    - Check preoptimize_pulse() success
    - Reduce noise parameters for testing
    - Verify physical parameters are reasonable
 
-2. Memory Errors:
+2. Free Shape Optimization Issues:
+   
+   Symptoms: Free shape converges poorly compared to parametric shapes
+   Causes:
+   - Higher dimensional optimization space
+   - Insufficient iterations
+   - Poor amplitude scaling
+   
+   Solutions:
+   - Use longer optimization (2× iterations)
+   - Start with successful parametric optimization
+   - Adjust amplitude bounds (Omega_1 * 10)
+   - Monitor pulse envelope evolution
+
+3. Memory Errors:
    
    Symptoms: Out of memory, system freezing
    Causes:
    - Too many workers for available RAM
    - Large time_count with noise batches
    - Memory leaks from incomplete cleanup
+   - Free shape uses more memory
    
    Solutions:
    - Reduce max_workers (try cpu_count // 4)
@@ -313,7 +429,7 @@ Common Issues and Solutions
    - Monitor memory usage during execution
    - Ensure proper cleanup (force_cleanup())
 
-3. Slow Execution:
+4. Slow Execution:
    
    Symptoms: Very long optimization times
    Causes:
@@ -321,21 +437,30 @@ Common Issues and Solutions
    - Large batch dimensions
    - High time resolution
    - Inefficient parallelization
+   - Free shape optimization complexity
    
    Solutions:
    - Optimize max_workers (try different values)
    - Profile with smaller problems first
    - Use background execution for long runs
    - Consider reducing time_count for testing
+   - Start with parametric shapes for testing
 
-4. Optimization Failures:
+5. Optimization Failures:
    
    Symptoms: NaN costs, optimization exceptions
    Causes:
    - Numerical instability
    - Invalid parameter bounds
    - Boulder Opal graph errors
+   - Division by zero in cost calculation
    
+   Solutions:
+   - Check parameter bounds and initial values
+   - Validate input signals and noise parameters
+   - Reduce learning rates if NaN appears
+   - Check for empty arrays in percentile calculations
+
 """
 
 # =============================================================================
@@ -358,13 +483,22 @@ def get_function_help(function_name):
     - intensity_distribution  
     - phase_noise
     - pulse
+    - const_pwc
+    - set_hamiltonian
+    - calculate_unitary
     - calculate_evolution
     - calculate_cost_states
+    - calculate_cost_unitaries
+    - evaluate_width
+    - preoptimize_pulse
     - single_optimisation
     - optimize_pulse
-    - preoptimize_pulse
     - plotting
     - estimate_number_workers
+    - initialize_optimization
+    - force_cleanup
+    - run_all_pulses
+    - main_execution
     """
     
     docs = {
@@ -377,11 +511,16 @@ def get_function_help(function_name):
         "calculate_unitary": calculate_unitary_doc.__doc__,
         "calculate_evolution": calculate_evolution_doc.__doc__,
         "calculate_cost_states": calculate_cost_states_doc.__doc__,
+        "calculate_cost_unitaries": calculate_cost_unitaries_doc.__doc__,
+        "evaluate_width": evaluate_width_doc.__doc__,
+        "preoptimize_pulse": preoptimize_pulse_doc.__doc__,
         "single_optimisation": single_optimisation_doc.__doc__,
         "optimize_pulse": optimize_pulse_doc.__doc__,
-        "preoptimize_pulse": preoptimize_pulse_doc.__doc__,
         "plotting": plotting_doc.__doc__,
         "estimate_number_workers": estimate_number_workers_doc.__doc__,
+        "initialize_optimization": initialize_optimization_doc.__doc__,
+        "force_cleanup": force_cleanup_doc.__doc__,
+        "run_all_pulses": run_all_pulses_doc.__doc__,
         "main_execution": main_execution_doc.__doc__,
     }
     
