@@ -28,7 +28,6 @@ import colorednoise as cn
 import qctrlvisualizer as qv
 import matplotlib.pyplot as plt
 
-from tqdm import tqdm
 from scipy.optimize import fsolve
 from multiprocessing import cpu_count, set_start_method
 from concurrent.futures import CancelledError, ProcessPoolExecutor, as_completed
@@ -237,8 +236,17 @@ def pulse(graph, pulse_shape, width, amplitude, name="pulse"):
             center_time=center_time,
             name= name)
     
+    # Free shaped pulse
+    elif pulse_shape == "free":
+        return graph.real_optimizable_pwc_signal(
+            segment_count=time_count//100,
+            duration=duration,
+            maximum=amplitude,
+            minimum=0,
+            name=name)
+    
     else:
-        raise ValueError("Shape not implemented. Choose 'gaus', 'box' or 'sech'.")
+        raise ValueError("Shape not implemented. Choose 'gaus', 'box', 'sech', or 'free'.")
 
 ### SIGNALS
 
@@ -278,14 +286,10 @@ def calculate_unitary(graph, hamiltonian):
 ### TIME EVOLUTION
 
 # Calculate the time evolution to return the states and unitaries.
-def calculate_evolution(graph, Delta_signal, delta_signal, Omega1, Omega2, 
-                        pulse_shape = "gaus",  width = 0.1, sigma_p = 0.0, 
-                        sigma_b = 0.0,  noise_max = 0.0,
+def calculate_evolution(graph, Delta_signal, delta_signal, 
+                        pulse1 = None, pulse2 = None,
+                        sigma_p = 0.0, sigma_b = 0.0,  noise_max = 0.0,
                         output_node_names=["states", "unitaries"]):
-    
-    # Create laser pulses
-    pulse1 = pulse(graph, pulse_shape, width, Omega1, name="pulse1")
-    pulse2 = pulse(graph, pulse_shape, width, Omega2, name="pulse2")
 
     # Generate momentum and intensity distributions
     batch_dim = 1
@@ -358,8 +362,8 @@ def plotting(result, sigma_p=0.0, sigma_b=0.0, noise_max=0.0,
     if noise_max != 0.0:
         param_parts.append(f"n_{noise_max}")
     param_key = "_".join(param_parts) if param_parts else "perfect"
-    shape_dir = "plots/sorted_plots"
-    param_dir = "plots/parameters"
+    shape_dir = os.path.join("plots", "sorted_plots")
+    param_dir = os.path.join("plots", "parameters")
     shape_path = os.path.join(shape_dir, pulse_type, pulse_shape, param_key)
     os.makedirs(shape_path, exist_ok=True)
     param_path = os.path.join(param_dir, param_key)
@@ -373,8 +377,8 @@ def plotting(result, sigma_p=0.0, sigma_b=0.0, noise_max=0.0,
         for non_null in [sigma_p != 0.0, sigma_b != 0.0]:
             if non_null:
                 populations = np.sum(populations, axis=0)
-        populations = populations / ((momentum_batch if sigma_p else 1) *
-                                      (intensity_batch if sigma_b else 1))
+        populations = populations / ((momentum_batch if sigma_p != 0.0 else 1) *
+                                      (intensity_batch if sigma_b != 0.0 else 1))
         fig = plt.figure()
         qv.plot_population_dynamics(
             sample_times, {rf"$|{k}\rangle$": populations[:, k] for k in [0, 1, 2]},
@@ -422,6 +426,7 @@ def plotting(result, sigma_p=0.0, sigma_b=0.0, noise_max=0.0,
     shape_file_path = os.path.join(shape_path, filename)
     param_file_path = os.path.join(param_path, filename)
     plt.savefig(shape_file_path, dpi=600, bbox_inches='tight')
+    plt.savefig(param_file_path, dpi=600, bbox_inches='tight')
 
     # Mr. Clean time
     plt.close(fig)
@@ -433,12 +438,16 @@ def plotting(result, sigma_p=0.0, sigma_b=0.0, noise_max=0.0,
 # Evaluate the efficiency for a quasi-perfect pulse
 def evaluate_width(width, pulse_shape, pulse_type):
 
-    # Initialize the graph and calculate the evolution oof the population
+    # Initialize the graph and calculate the evolution of the population
     graph = bo.Graph()
     result = calculate_evolution(graph=graph, Delta_signal=const_pwc(graph, Delta),
-        delta_signal=const_pwc(graph, delta), Omega1=Omega_1, Omega2=Omega_2,
-        pulse_shape=pulse_shape, width=width, sigma_p=0.0, sigma_b=0.0, 
-        noise_max=0.0, output_node_names=["states"])
+        delta_signal=const_pwc(graph, delta), 
+        pulse1=pulse(graph, pulse_shape, width, Omega_1, name="pulse1") if pulse_shape != "free"
+        else pulse(graph, "gaus", width, Omega_1, name="pulse1"),
+        pulse2=pulse(graph, pulse_shape, width, Omega_2, name="pulse2") if pulse_shape != "free"
+        else pulse(graph, "gaus", width, Omega_2, name="pulse2"),
+        sigma_p=0.0, sigma_b=0.0, noise_max=0.0, 
+        output_node_names=["states"])
     populations = np.abs(result["output"]["states"]["value"].squeeze()) ** 2
 
     # Set the tolerance and threshold to the wanted population mismatch
@@ -462,12 +471,6 @@ def evaluate_width(width, pulse_shape, pulse_type):
 # Find the correct width for a given pulse shape and type.
 def preoptimize_pulse(pulse_shape, pulse_type, initial_width=10e-6):
 
-    # Check if the pulse shape and type are valid
-    if pulse_shape not in ["gaus", "box", "sech"]:
-        raise ValueError("Implemented shape: gaus, box or sech")
-    if pulse_type not in ["bs", "m"]:
-        raise ValueError("bs for beam-splitter or m for mirror")
-    
     # Initialize the search for an optimal width
     widths = np.arange(initial_width, duration / 2, 0.5 * duration / time_count)
     found_width = None
@@ -503,8 +506,12 @@ def preoptimize_pulse(pulse_shape, pulse_type, initial_width=10e-6):
     if found_width is not None:
         graph = bo.Graph()
         result = calculate_evolution(graph=graph, Delta_signal=const_pwc(graph, Delta),
-            delta_signal=const_pwc(graph, delta), Omega1=Omega_1, Omega2=Omega_2,
-            pulse_shape=pulse_shape, width=found_width, sigma_p=0.0, sigma_b=0.0, 
+            delta_signal=const_pwc(graph, delta),
+            pulse1 = pulse(graph, pulse_shape, found_width, Omega_1, name="pulse1") if pulse_shape != "free"
+            else pulse(graph, "gaus", found_width, Omega_1, name="pulse1"),
+            pulse2 = pulse(graph, pulse_shape, found_width, Omega_2, name="pulse2") if pulse_shape != "free"
+            else pulse(graph, "gaus", found_width, Omega_2, name="pulse2"),
+            sigma_p=0.0, sigma_b=0.0, 
             noise_max=0.0, output_node_names=["states", "unitaries", "pulse1", "pulse2"])
         plotting(result, pulse_shape=pulse_shape, pulse_type=pulse_type, what="states", 
                  when="before")
@@ -525,12 +532,20 @@ def single_optimisation(learning_rate, target_unitary, target_index, pulse_shape
 
     # Initialze the graph and the optimization variables
     graph = bo.Graph()
-    Omega_1_var = graph.optimizable_scalar(lower_bound=Omega_1 * 0.1, upper_bound=Omega_1 * 10, name="Omega_1",
+
+    if pulse_shape == "free":
+        pulse1 = pulse(graph, pulse_shape, width, Omega_1 * 10, name="pulse1")
+        pulse2 = pulse(graph, pulse_shape, width, Omega_2 * 10, name="pulse2")
+    else:
+        Omega_1_var = graph.optimizable_scalar(lower_bound=Omega_1 * 0.1, upper_bound=Omega_1 * 10, name="Omega_1",
                                             initial_values=Omega_1)
-    Omega_2_var = graph.optimizable_scalar(lower_bound=Omega_2 * 0.1, upper_bound=Omega_2 * 10, name="Omega_2",
+        Omega_2_var = graph.optimizable_scalar(lower_bound=Omega_2 * 0.1, upper_bound=Omega_2 * 10, name="Omega_2",
                                             initial_values=Omega_2)
-    tau = graph.optimizable_scalar(lower_bound=width * 0.1, upper_bound=width * 10, name="tau",
+        tau = graph.optimizable_scalar(lower_bound=width * 0.1, upper_bound=width * 10, name="tau",
                                     initial_values=width)
+        pulse1 = pulse(graph, pulse_shape, tau, Omega_1_var, name="pulse1")
+        pulse2 = pulse(graph, pulse_shape, tau, Omega_2_var, name="pulse2")
+        
     delta_signal = graph.filter_and_resample_pwc(
         pwc=graph.real_optimizable_pwc_signal(segment_count=time_count // 100,
              duration=duration, maximum=delta_max, minimum=0, name="predelta"),
@@ -545,10 +560,6 @@ def single_optimisation(learning_rate, target_unitary, target_index, pulse_shape
     random_phi_1 = phase_noise(graph, noise_max=noise_max)
     random_phi_2 = phase_noise(graph, noise_max=noise_max)
 
-    # Create the laser pulses
-    pulse1 = pulse(graph, pulse_shape, tau, Omega_1_var, name="pulse1")
-    pulse2 = pulse(graph, pulse_shape, tau, Omega_2_var, name="pulse2")
-
     # Set the Hamiltonian and calculate the unitaries
     hamiltonian = set_hamiltonian(graph, const_pwc(graph, Delta), delta_signal,
                                   pulse1, pulse2, momentum, betas, random_phi_1, random_phi_2)
@@ -558,8 +569,8 @@ def single_optimisation(learning_rate, target_unitary, target_index, pulse_shape
     for non_null in [sigma_p != 0.0, sigma_b != 0.0]:
         if non_null:
             unitaries = graph.sum(unitaries, axis=0)
-    unitaries = unitaries / ((momentum_batch if sigma_p else 1) *
-                                      (intensity_batch if sigma_b else 1))
+    unitaries = unitaries / ((momentum_batch if sigma_p != 0.0 else 1) *
+                                      (intensity_batch if sigma_b != 0.0 else 1))
     
     # Calculate the cost
     if cost_type == "unitaries":
@@ -569,11 +580,15 @@ def single_optimisation(learning_rate, target_unitary, target_index, pulse_shape
     elif cost_type == "states":
         cost = calculate_cost_states(graph, pulse_type, unitaries)
 
-    # Run the optimization using an Adam optimizer 
+    # Run the optimization using an Adam optimizer
+    if pulse_shape == "free":
+        output_node_names = ["delta", "unitaries", "cost", "pulse1", "pulse2"]
+    else:
+        output_node_names = ["Omega_1", "Omega_2", "tau", "delta", "unitaries", "cost", "pulse1", "pulse2"]
     result = bo.run_stochastic_optimization(
         graph=graph,
         cost_node_name="cost",
-        output_node_names=["Omega_1", "Omega_2", "tau", "delta", "unitaries", "cost", "pulse1", "pulse2"],
+        output_node_names=output_node_names,
         optimizer=bo.stochastic.Adam(learning_rate),
         cost_history_scope="HISTORICAL_BEST",
         iteration_count=nb_iter)
@@ -588,9 +603,17 @@ def single_optimisation(learning_rate, target_unitary, target_index, pulse_shape
 def optimize_pulse(pulse_shape="gaus", pulse_type="bs", sigma_p=0.0, sigma_b=0.0,
                    noise_max=0.0, width=None, target_unitary=None, target_index=None):
     
+    # Check if the pulse shape and type are valid
+    if pulse_shape not in ["gaus", "box", "sech", "free"]:
+        raise ValueError("Implemented shape: gaus, box, sech or free")
+    if pulse_type not in ["bs", "m"]:
+        raise ValueError("bs for beam-splitter or m for mirror")
+
     # Find the optimal width and target unitary for the ideal system if not provided
     if None in (width, target_unitary, target_index):
         w, t_u, t_i = preoptimize_pulse(pulse_shape=pulse_shape, pulse_type=pulse_type)
+        if w is None or t_u is None or t_i is None:
+            raise RuntimeError(f"Preoptimization failed for {pulse_shape}_{pulse_type}. Check parameters.")
         width = width or w
         target_unitary = target_unitary or t_u
         target_index = target_index or t_i
@@ -599,9 +622,13 @@ def optimize_pulse(pulse_shape="gaus", pulse_type="bs", sigma_p=0.0, sigma_b=0.0
     if sigma_p > 0.0 or sigma_b > 0.0 or noise_max > 0.0:
         graph = bo.Graph()
         result = calculate_evolution(graph=graph, Delta_signal=const_pwc(graph, Delta),
-            delta_signal=const_pwc(graph, delta), Omega1=Omega_1, Omega2=Omega_2,
-            pulse_shape=pulse_shape, width=width, sigma_p=sigma_p, sigma_b=sigma_b, 
-            noise_max=noise_max, output_node_names=["states", "unitaries"])
+            delta_signal=const_pwc(graph, delta), 
+            pulse1 = pulse(graph, pulse_shape, width, Omega_1, name="pulse1") if pulse_shape != "free"
+            else pulse(graph, "gaus", width, Omega_1, name="pulse1"),
+            pulse2 = pulse(graph, pulse_shape, width, Omega_2, name="pulse2") if pulse_shape != "free"
+            else pulse(graph, "gaus", width, Omega_2, name="pulse2"),
+            sigma_p=sigma_p, sigma_b=sigma_b, noise_max=noise_max, 
+            output_node_names=["states", "unitaries"])
         plotting(result, sigma_p=sigma_p, sigma_b=sigma_b, noise_max=noise_max,
                  pulse_shape=pulse_shape, pulse_type=pulse_type, what="states", when="before")
     
@@ -629,7 +656,9 @@ def optimize_pulse(pulse_shape="gaus", pulse_type="bs", sigma_p=0.0, sigma_b=0.0
             except (CancelledError, Exception):
                 pass
     time.sleep(1)
-
+    if not result:
+        raise RuntimeError("All optimization attempts failed. Check parameters and try again.")
+    
     # Find the best learning rate based on the cost
     best_lr = min(result, key=lambda lr: result[lr]["cost"])
     # print(f"Best learning rate found: {best_lr} with cost = {result[best_lr]['cost']:.4e}")
@@ -640,7 +669,7 @@ def optimize_pulse(pulse_shape="gaus", pulse_type="bs", sigma_p=0.0, sigma_b=0.0
     
     # Restart the optimization with the best learning rate
     lr, final_result = single_optimisation(
-        best_lr, pulse_shape, pulse_type, sigma_p, sigma_b,
+        best_lr, target_unitary, target_index, pulse_shape, pulse_type, sigma_p, sigma_b,
         noise_max, width, 2 * nb_iterations)
     
     # Retrive all the values from the final result
@@ -648,26 +677,49 @@ def optimize_pulse(pulse_shape="gaus", pulse_type="bs", sigma_p=0.0, sigma_b=0.0
              pulse_shape=pulse_shape, pulse_type=pulse_type, what="controls", when="after")
     plotting({best_lr: final_result}, sigma_p=sigma_p, sigma_b=sigma_b, noise_max=noise_max,
              pulse_shape=pulse_shape, pulse_type=pulse_type, what="cost", when="best_lr")
-    Omega_1_opt = final_result["output"]["Omega_1"]["value"]
-    Omega_2_opt = final_result["output"]["Omega_2"]["value"]
-    tau_opt = final_result["output"]["tau"]["value"]
+    
+    if pulse_shape == "free":
+        pulse1_opt = final_result["output"]["pulse1"]["values"]
+        pulse2_opt = final_result["output"]["pulse2"]["values"]
+        tau_opt = None  
+        Omega_1_opt = None   
+        Omega_2_opt = None  
+    else :
+        Omega_1_opt = final_result["output"]["Omega_1"]["value"]
+        Omega_2_opt = final_result["output"]["Omega_2"]["value"]
+        tau_opt = final_result["output"]["tau"]["value"]
+        pulse1_opt = None  
+        pulse2_opt = None  
     delta_opt = final_result["output"]["delta"]["values"]
 
     # Save the optimized parameters to a file
     save_dir = "data"
     os.makedirs(save_dir, exist_ok=True)
     filename = f"{save_dir}/params_{pulse_type}_{pulse_shape}_p{sigma_p}_b{sigma_b}_n{noise_max}.pkl"
-    with open(filename, "wb") as f:pickle.dump({"Omega_1": Omega_1_opt,"Omega_2": Omega_2_opt,
+    if pulse_shape == "free":
+        with open(filename, "wb") as f:pickle.dump({"pulse1": pulse1_opt, "pulse2": pulse2_opt,
+            "delta": delta_opt, "learning_rate": best_lr}, f)
+    else:
+        with open(filename, "wb") as f:pickle.dump({"Omega_1": Omega_1_opt,"Omega_2": Omega_2_opt,
             "tau": tau_opt,"delta": delta_opt, "learning_rate": best_lr}, f)
     # print(f"Saved optimized parameters to {filename}")
 
     # Calculate the evolution of the system with the optimized parameters
     graph = bo.Graph()
-    result_evol = calculate_evolution(graph=graph, Delta_signal=const_pwc(graph, Delta),
-        delta_signal=graph.pwc_signal(values=delta_opt, duration=duration),
-        Omega1=Omega_1_opt, Omega2=Omega_2_opt, pulse_shape=pulse_shape, width=tau_opt,
-        sigma_p=sigma_p, sigma_b=sigma_b, noise_max=noise_max,
-        output_node_names=["states", "unitaries"])
+    if pulse_shape == "free":
+        result_evol = calculate_evolution(graph=graph, Delta_signal=const_pwc(graph, Delta),
+            delta_signal=graph.pwc_signal(values=delta_opt, duration=duration),
+            pulse1=graph.pwc_signal(values=pulse1_opt, duration=duration),
+            pulse2=graph.pwc_signal(values=pulse2_opt, duration=duration),
+            sigma_p=sigma_p, sigma_b=sigma_b, noise_max=noise_max,
+            output_node_names=["states", "unitaries"])
+    else:
+        result_evol = calculate_evolution(graph=graph, Delta_signal=const_pwc(graph, Delta),
+            delta_signal=graph.pwc_signal(values=delta_opt, duration=duration),
+            pulse1=pulse(graph, pulse_shape, tau_opt, Omega_1_opt),
+            pulse2=pulse(graph, pulse_shape, tau_opt, Omega_2_opt),
+            sigma_p=sigma_p, sigma_b=sigma_b, noise_max=noise_max,
+            output_node_names=["states", "unitaries"])
     plotting(result_evol, sigma_p=sigma_p, sigma_b=sigma_b, noise_max=noise_max,
              pulse_shape=pulse_shape, pulse_type=pulse_type, what="states",
              when=f"after_lr_{best_lr}")
@@ -683,9 +735,9 @@ def optimize_pulse(pulse_shape="gaus", pulse_type="bs", sigma_p=0.0, sigma_b=0.0
 # Estimate the number of workers based on available resources (NOT IMPLEMENTED)
 def estimate_number_workers(time_count, nb_iterations):
     available_memory = psutil.virtual_memory().available
-    max_workers = cpu_count() // 2
+    max_workers = cpu_count() // 2 # Implement a more sophisticated logic here
     print("The logic for it has not been implemented yet and is using default value.") 
-    return min(cpu_count-2, max_workers)
+    return min(cpu_count()-2, max_workers)
 
 # Initialize the optimization parameters
 def initialize_optimization(lr_log_min, lr_log_max):
@@ -714,7 +766,7 @@ def force_cleanup():
 # Simplify the execution for all pulses
 def run_all_pulses(sigma_p, sigma_b, noise_max):
     start = time.time()
-    for shape in ["gaus", "box", "sech"]:
+    for shape in ["gaus", "box", "sech", "free"]:
         for p_type in ["bs", "m"]:
             optimize_pulse(pulse_shape=shape,pulse_type=p_type,
                 sigma_p=sigma_p,sigma_b=sigma_b,
